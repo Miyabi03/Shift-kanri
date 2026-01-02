@@ -540,10 +540,10 @@ function App() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead>
               <tr style={{ background: '#f8f9fa' }}>
-                <th style={{ ...headerStyle, width: '50px', position: 'sticky', left: 0, zIndex: 3, background: '#f8f9fa' }}>No.</th>
-                <th style={{ ...headerStyle, width: '70px', position: 'sticky', left: '50px', zIndex: 3, background: '#f8f9fa' }}>ID</th>
-                <th style={{ ...headerStyle, width: '100px', position: 'sticky', left: '120px', zIndex: 3, background: '#f8f9fa' }}>本名</th>
-                <th style={{ ...headerStyle, width: '120px', position: 'sticky', left: '220px', zIndex: 3, background: '#f8f9fa' }}>LINE名</th>
+                <th style={{ ...headerStyle, width: '40px', minWidth: '40px', position: 'sticky', left: 0, zIndex: 3, background: '#f8f9fa' }}>No.</th>
+                <th style={{ ...headerStyle, width: '60px', minWidth: '60px', position: 'sticky', left: '40px', zIndex: 3, background: '#f8f9fa' }}>ID</th>
+                <th style={{ ...headerStyle, width: '80px', minWidth: '80px', position: 'sticky', left: '100px', zIndex: 3, background: '#f8f9fa', whiteSpace: 'nowrap' }}>本名</th>
+                <th style={{ ...headerStyle, width: '80px', minWidth: '80px', position: 'sticky', left: '180px', zIndex: 3, background: '#f8f9fa', whiteSpace: 'nowrap' }}>LINE名</th>
                 {dates.map((date, i) => {
                   const dayIndex = date.getDay();
                   return (
@@ -564,10 +564,10 @@ function App() {
                   const canEditRow = canEdit(s.id);
                   return (
                     <tr key={s.id} style={{ borderBottom: '1px solid #eee', background: isMyRow ? '#fffde7' : 'transparent' }}>
-                      <td style={{ ...cellStyle, position: 'sticky', left: 0, background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontWeight: '600' }}>{index + 1}{isMyRow && ' ⭐'}</td>
-                      <td style={{ ...cellStyle, position: 'sticky', left: '50px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2 }}>{s.staff_id}</td>
-                      <td style={{ ...cellStyle, position: 'sticky', left: '120px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontWeight: '500' }}>{s.name}</td>
-                      <td style={{ ...cellStyle, position: 'sticky', left: '220px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2 }}>
+                      <td style={{ ...cellStyle, position: 'sticky', left: 0, background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontWeight: '600', fontSize: '12px', width: '40px', minWidth: '40px' }}>{index + 1}{isMyRow && ' ⭐'}</td>
+                      <td style={{ ...cellStyle, position: 'sticky', left: '40px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontSize: '12px', width: '60px', minWidth: '60px' }}>{s.staff_id}</td>
+                      <td style={{ ...cellStyle, position: 'sticky', left: '100px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontWeight: '500', fontSize: '11px', whiteSpace: 'nowrap', width: '80px', minWidth: '80px' }}>{s.name}</td>
+                      <td style={{ ...cellStyle, position: 'sticky', left: '180px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontSize: '11px', whiteSpace: 'nowrap', width: '80px', minWidth: '80px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           <span>{s.line_name || '-'}</span>
                           {isAdmin && <button onClick={() => removeStaff(s.id)} style={{ background: '#ff5252', color: 'white', border: 'none', borderRadius: '4px', width: '20px', height: '20px', fontSize: '12px', cursor: 'pointer', marginLeft: '8px' }}>×</button>}
