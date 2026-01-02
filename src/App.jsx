@@ -5,17 +5,16 @@ const SUPABASE_URL = 'https://uqhakbpphjgjnrdzlbju.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxaGFrYnBwaGpnam5yZHpsYmp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjczMDEwMjcsImV4cCI6MjA4Mjg3NzAyN30.Pg7ld7idJa0nxR0AA1dxPifa-NkbA8DYPXsVaMJO-Eo';
 
 // Supabase REST API ヘルパー
-const supabaseRequest = async (table, method = 'GET', body = null, query = '') => {
+const supabaseRequest = async (table, method = 'GET', body = null, query = '', token = null) => {
   const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
-  const options = {
-    method,
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': method === 'POST' ? 'return=representation' : 'return=minimal'
-    }
+  const headers = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${token || SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': method === 'POST' ? 'return=representation' : 'return=minimal'
   };
+  
+  const options = { method, headers };
   if (body) options.body = JSON.stringify(body);
   
   const response = await fetch(url, options);
@@ -29,15 +28,65 @@ const supabaseRequest = async (table, method = 'GET', body = null, query = '') =
   return null;
 };
 
+// Supabase Auth ヘルパー
+const supabaseAuth = {
+  signInWithGoogle: async () => {
+    const redirectUrl = window.location.origin;
+    window.location.href = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectUrl}`;
+  },
+  
+  getSession: async () => {
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const accessToken = hashParams.get('access_token');
+    
+    if (accessToken) {
+      localStorage.setItem('supabase_token', accessToken);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return { access_token: accessToken };
+    }
+    
+    const storedToken = localStorage.getItem('supabase_token');
+    if (storedToken) {
+      return { access_token: storedToken };
+    }
+    
+    return null;
+  },
+  
+  getUser: async (accessToken) => {
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'apikey': SUPABASE_KEY
+      }
+    });
+    if (!response.ok) return null;
+    return response.json();
+  },
+  
+  signOut: () => {
+    localStorage.removeItem('supabase_token');
+    window.location.reload();
+  }
+};
+
 function App() {
+  const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [myStaffId, setMyStaffId] = useState(null);
+  
   const [staff, setStaff] = useState([]);
   const [shifts, setShifts] = useState({});
   const [isLoading, setIsLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState('');
-  const [newStaff, setNewStaff] = useState({ staff_id: '', name: '', line_name: '' });
+  const [newStaff, setNewStaff] = useState({ staff_id: '', name: '', line_name: '', email: '' });
   const [error, setError] = useState(null);
+  
+  const [showAdminVerify, setShowAdminVerify] = useState(false);
+  const [adminCode, setAdminCode] = useState('');
+  const [sentCode, setSentCode] = useState(null);
 
-  // 日付の生成（今日から14日間）
   const generateDates = () => {
     const dates = [];
     const today = new Date();
@@ -52,7 +101,6 @@ function App() {
   const [dates] = useState(generateDates());
   const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
 
-  // 日付をYYYY-MM-DD形式に変換
   const formatDate = (date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -60,20 +108,52 @@ function App() {
     return `${year}-${month}-${day}`;
   };
 
-  // データ読み込み
   useEffect(() => {
-    loadData();
+    initAuth();
   }, []);
 
-  const loadData = async () => {
+  const initAuth = async () => {
     setIsLoading(true);
-    setError(null);
+    try {
+      const session = await supabaseAuth.getSession();
+      if (session?.access_token) {
+        setSession(session);
+        const userData = await supabaseAuth.getUser(session.access_token);
+        if (userData) {
+          setUser(userData);
+          await checkUserRole(userData.email, session.access_token);
+        }
+      }
+      await loadData();
+    } catch (err) {
+      console.error('初期化エラー:', err);
+      setError('初期化に失敗しました');
+    }
+    setIsLoading(false);
+  };
+
+  const checkUserRole = async (email, token) => {
+    try {
+      const admins = await supabaseRequest('admins', 'GET', null, `?email=eq.${email}`, token);
+      if (admins && admins.length > 0) {
+        setIsAdmin(true);
+      }
+      
+      const myStaff = await supabaseRequest('staff', 'GET', null, `?email=eq.${email}`, token);
+      if (myStaff && myStaff.length > 0) {
+        setMyStaffId(myStaff[0].id);
+      }
+    } catch (err) {
+      console.error('権限チェックエラー:', err);
+    }
+  };
+
+  const loadData = async () => {
     try {
       await Promise.all([loadStaff(), loadShifts()]);
     } catch (err) {
       setError('データの読み込みに失敗しました: ' + err.message);
     }
-    setIsLoading(false);
   };
 
   const loadStaff = async () => {
@@ -83,7 +163,6 @@ function App() {
 
   const loadShifts = async () => {
     const data = await supabaseRequest('shifts', 'GET', null, '?select=*');
-    
     const shiftsObj = {};
     (data || []).forEach(shift => {
       const key = `${shift.staff_id}_${shift.shift_date}`;
@@ -98,18 +177,26 @@ function App() {
     setShifts(shiftsObj);
   };
 
-  // 時間オプション生成
   const timeOptions = [];
   for (let h = 0; h <= 24; h++) {
     timeOptions.push(`${h}:00`);
     if (h < 24) timeOptions.push(`${h}:30`);
   }
 
-  const getShiftKey = (staffId, date) => {
-    return `${staffId}_${formatDate(date)}`;
+  const getShiftKey = (staffId, date) => `${staffId}_${formatDate(date)}`;
+
+  const canEdit = (staffDbId) => {
+    if (!user) return false;
+    if (isAdmin) return true;
+    return staffDbId === myStaffId;
   };
 
   const updateShift = async (staffId, date, field, value) => {
+    if (!canEdit(staffId)) {
+      alert('自分のシフトのみ編集できます');
+      return;
+    }
+    
     const dateStr = formatDate(date);
     const key = getShiftKey(staffId, date);
     const currentShift = shifts[key] || {};
@@ -148,6 +235,11 @@ function App() {
   };
 
   const setOff = async (staffId, date) => {
+    if (!canEdit(staffId)) {
+      alert('自分のシフトのみ編集できます');
+      return;
+    }
+    
     const dateStr = formatDate(date);
     const key = getShiftKey(staffId, date);
     const currentShift = shifts[key] || {};
@@ -181,6 +273,11 @@ function App() {
   };
 
   const clearShift = async (staffId, date) => {
+    if (!canEdit(staffId)) {
+      alert('自分のシフトのみ編集できます');
+      return;
+    }
+    
     const key = getShiftKey(staffId, date);
     const currentShift = shifts[key];
     
@@ -201,8 +298,13 @@ function App() {
   };
 
   const addStaff = async () => {
-    if (!newStaff.staff_id || !newStaff.name) {
-      alert('IDと本名は必須です');
+    if (!isAdmin) {
+      alert('管理者のみスタッフを追加できます');
+      return;
+    }
+    
+    if (!newStaff.staff_id || !newStaff.name || !newStaff.email) {
+      alert('ID、本名、メールアドレスは必須です');
       return;
     }
     
@@ -212,17 +314,18 @@ function App() {
       await supabaseRequest('staff', 'POST', {
         staff_id: newStaff.staff_id,
         name: newStaff.name,
-        line_name: newStaff.line_name || null
+        line_name: newStaff.line_name || null,
+        email: newStaff.email
       });
       
-      setNewStaff({ staff_id: '', name: '', line_name: '' });
+      setNewStaff({ staff_id: '', name: '', line_name: '', email: '' });
       await loadStaff();
       setSaveStatus('✓ スタッフ追加完了');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
       console.error('スタッフ追加エラー:', err);
       if (err.message.includes('duplicate')) {
-        alert('このIDは既に使用されています');
+        alert('このIDまたはメールアドレスは既に使用されています');
       }
       setSaveStatus('⚠ 追加失敗');
       setTimeout(() => setSaveStatus(''), 3000);
@@ -230,7 +333,12 @@ function App() {
   };
 
   const removeStaff = async (id) => {
-    if (!confirm('このスタッフを削除しますか？関連するシフトも全て削除されます。')) return;
+    if (!isAdmin) {
+      alert('管理者のみスタッフを削除できます');
+      return;
+    }
+    
+    if (!confirm('このスタッフを削除しますか？')) return;
     
     setSaveStatus('削除中...');
     
@@ -247,7 +355,29 @@ function App() {
     }
   };
 
-  // スタイル定義
+  const registerAsAdmin = async () => {
+    if (!user) return;
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setSentCode(code);
+    setShowAdminVerify(true);
+    alert(`認証コード: ${code}\n（本番環境ではメールで送信されます）`);
+  };
+
+  const verifyAdminCode = async () => {
+    if (adminCode === sentCode) {
+      try {
+        await supabaseRequest('admins', 'POST', { email: user.email });
+        setIsAdmin(true);
+        setShowAdminVerify(false);
+        alert('管理者として登録されました！');
+      } catch (err) {
+        alert('登録に失敗しました');
+      }
+    } else {
+      alert('認証コードが一致しません');
+    }
+  };
+
   const headerStyle = {
     padding: '12px 8px',
     textAlign: 'center',
@@ -292,14 +422,14 @@ function App() {
             animation: 'spin 1s linear infinite',
             margin: '0 auto 16px'
           }} />
-          <p style={{ color: '#666' }}>Supabaseに接続中...</p>
+          <p style={{ color: '#666' }}>読み込み中...</p>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       </div>
     );
   }
 
-  if (error) {
+  if (!user) {
     return (
       <div style={{
         display: 'flex',
@@ -307,25 +437,99 @@ function App() {
         alignItems: 'center',
         height: '100vh',
         fontFamily: '"Hiragino Sans", "Noto Sans JP", sans-serif',
-        background: '#f8f9fa'
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
       }}>
-        <div style={{ textAlign: 'center', padding: '20px', maxWidth: '500px' }}>
-          <p style={{ color: '#e53935', fontSize: '18px' }}>⚠ 接続エラー</p>
-          <p style={{ color: '#666', fontSize: '14px', marginTop: '8px' }}>{error}</p>
+        <div style={{
+          background: 'white',
+          padding: '48px',
+          borderRadius: '16px',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+          textAlign: 'center',
+          maxWidth: '400px'
+        }}>
+          <h1 style={{ margin: '0 0 8px 0', fontSize: '28px', color: '#333' }}>📅 シフト管理</h1>
+          <p style={{ color: '#666', marginBottom: '32px' }}>Googleアカウントでログインしてください</p>
+          
           <button
-            onClick={() => { setError(null); loadData(); }}
+            onClick={() => supabaseAuth.signInWithGoogle()}
             style={{
-              marginTop: '16px',
-              padding: '10px 24px',
-              background: '#667eea',
-              color: 'white',
-              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '12px',
+              width: '100%',
+              padding: '14px 24px',
+              background: 'white',
+              border: '2px solid #ddd',
               borderRadius: '8px',
+              fontSize: '16px',
+              fontWeight: '500',
               cursor: 'pointer'
             }}
           >
-            再接続
+            <svg width="20" height="20" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            Googleでログイン
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (showAdminVerify) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        fontFamily: '"Hiragino Sans", "Noto Sans JP", sans-serif',
+        background: 'rgba(0,0,0,0.5)'
+      }}>
+        <div style={{
+          background: 'white',
+          padding: '32px',
+          borderRadius: '12px',
+          maxWidth: '400px',
+          width: '90%'
+        }}>
+          <h2 style={{ margin: '0 0 16px 0' }}>🔐 管理者認証</h2>
+          <p style={{ color: '#666', marginBottom: '16px' }}>認証コードを入力してください</p>
+          <input
+            type="text"
+            placeholder="認証コード"
+            value={adminCode}
+            onChange={(e) => setAdminCode(e.target.value.toUpperCase())}
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '2px solid #ddd',
+              borderRadius: '8px',
+              fontSize: '18px',
+              textAlign: 'center',
+              letterSpacing: '4px',
+              marginBottom: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={() => setShowAdminVerify(false)}
+              style={{ flex: 1, padding: '12px', background: '#eee', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+            >
+              キャンセル
+            </button>
+            <button
+              onClick={verifyAdminCode}
+              style={{ flex: 1, padding: '12px', background: '#667eea', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
+            >
+              認証
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -333,12 +537,11 @@ function App() {
 
   return (
     <div style={{
-      fontFamily: '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif',
+      fontFamily: '"Hiragino Sans", "Noto Sans JP", sans-serif',
       backgroundColor: '#f8f9fa',
       minHeight: '100vh',
       padding: '20px'
     }}>
-      {/* ヘッダー */}
       <div style={{
         background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
         borderRadius: '12px',
@@ -348,135 +551,68 @@ function App() {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
           <div>
-            <h1 style={{ color: 'white', margin: 0, fontSize: '24px', fontWeight: '600' }}>
-              📅 シフト管理表
-            </h1>
+            <h1 style={{ color: 'white', margin: 0, fontSize: '24px', fontWeight: '600' }}>📅 シフト管理表</h1>
             <p style={{ color: 'rgba(255,255,255,0.8)', margin: '8px 0 0 0', fontSize: '14px' }}>
-              稼働可能時間を入力してください（0:00〜24:00）
-            </p>
-            <p style={{ color: 'rgba(255,255,255,0.6)', margin: '4px 0 0 0', fontSize: '12px' }}>
-              ☁️ Supabase連携 | 🌐 オンライン共有
+              {user.email} {isAdmin && <span style={{ background: 'rgba(255,255,255,0.2)', padding: '2px 8px', borderRadius: '4px', marginLeft: '8px' }}>管理者</span>}
             </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {saveStatus && (
-              <span style={{
-                background: 'rgba(255,255,255,0.2)',
-                padding: '8px 16px',
-                borderRadius: '20px',
-                color: 'white',
-                fontSize: '13px',
-                fontWeight: '500'
-              }}>
-                {saveStatus}
-              </span>
+              <span style={{ background: 'rgba(255,255,255,0.2)', padding: '8px 16px', borderRadius: '20px', color: 'white', fontSize: '13px' }}>{saveStatus}</span>
             )}
-            <button
-              onClick={loadData}
-              style={{
-                padding: '8px 16px',
-                background: 'rgba(255,255,255,0.2)',
-                color: 'white',
-                border: '1px solid rgba(255,255,255,0.3)',
-                borderRadius: '8px',
-                fontSize: '12px',
-                cursor: 'pointer'
-              }}
-            >
+            {!isAdmin && (
+              <button onClick={registerAsAdmin} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
+                🔐 管理者登録
+              </button>
+            )}
+            <button onClick={loadData} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
               🔄 更新
+            </button>
+            <button onClick={() => supabaseAuth.signOut()} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
+              ログアウト
             </button>
           </div>
         </div>
       </div>
 
-      {/* スタッフ追加フォーム */}
-      <div style={{
-        background: 'white',
-        borderRadius: '12px',
-        padding: '20px',
-        marginBottom: '24px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
-      }}>
-        <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', color: '#333' }}>
-          ➕ スタッフ追加
-        </h3>
-        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>ID *</label>
-            <input
-              type="text"
-              placeholder="1234"
-              value={newStaff.staff_id}
-              onChange={(e) => setNewStaff({ ...newStaff, staff_id: e.target.value })}
-              style={{
-                padding: '10px 14px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px',
-                width: '100px',
-                outline: 'none'
-              }}
-            />
+      {isAdmin && (
+        <div style={{ background: 'white', borderRadius: '12px', padding: '20px', marginBottom: '24px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', color: '#333' }}>➕ スタッフ追加（管理者専用）</h3>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>ID *</label>
+              <input type="text" placeholder="1234" value={newStaff.staff_id} onChange={(e) => setNewStaff({ ...newStaff, staff_id: e.target.value })} style={{ padding: '10px 14px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px', width: '80px' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>本名 *</label>
+              <input type="text" placeholder="山田太郎" value={newStaff.name} onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })} style={{ padding: '10px 14px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px', width: '120px' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>LINE名</label>
+              <input type="text" placeholder="たろう" value={newStaff.line_name} onChange={(e) => setNewStaff({ ...newStaff, line_name: e.target.value })} style={{ padding: '10px 14px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px', width: '120px' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>メール *</label>
+              <input type="email" placeholder="example@gmail.com" value={newStaff.email} onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })} style={{ padding: '10px 14px', border: '2px solid #e0e0e0', borderRadius: '8px', fontSize: '14px', width: '200px' }} />
+            </div>
+            <button onClick={addStaff} style={{ padding: '10px 24px', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>追加</button>
           </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>本名 *</label>
-            <input
-              type="text"
-              placeholder="山田太郎"
-              value={newStaff.name}
-              onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })}
-              style={{
-                padding: '10px 14px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px',
-                width: '140px',
-                outline: 'none'
-              }}
-            />
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '4px' }}>LINE名</label>
-            <input
-              type="text"
-              placeholder="たろう"
-              value={newStaff.line_name}
-              onChange={(e) => setNewStaff({ ...newStaff, line_name: e.target.value })}
-              style={{
-                padding: '10px 14px',
-                border: '2px solid #e0e0e0',
-                borderRadius: '8px',
-                fontSize: '14px',
-                width: '140px',
-                outline: 'none'
-              }}
-            />
-          </div>
-          <button
-            onClick={addStaff}
-            style={{
-              padding: '10px 24px',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: '600',
-              cursor: 'pointer'
-            }}
-          >
-            追加
-          </button>
         </div>
-      </div>
+      )}
 
-      {/* シフト表 */}
-      <div style={{
-        background: 'white',
-        borderRadius: '12px',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-        overflow: 'hidden'
-      }}>
+      {!isAdmin && myStaffId && (
+        <div style={{ background: '#e3f2fd', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px', border: '1px solid #90caf9' }}>
+          <p style={{ margin: 0, color: '#1565c0' }}>ℹ️ 自分の行（⭐マーク）のみ編集できます。他のスタッフのシフトは閲覧のみです。</p>
+        </div>
+      )}
+
+      {!isAdmin && !myStaffId && (
+        <div style={{ background: '#fff3e0', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px', border: '1px solid #ffcc80' }}>
+          <p style={{ margin: 0, color: '#e65100' }}>⚠️ あなたのメールアドレスはまだスタッフとして登録されていません。管理者に登録を依頼してください。</p>
+        </div>
+      )}
+
+      <div style={{ background: 'white', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead>
@@ -488,14 +624,9 @@ function App() {
                 {dates.map((date, i) => {
                   const dayIndex = date.getDay();
                   return (
-                    <th key={i} style={{
-                      ...headerStyle,
-                      minWidth: '140px',
-                      background: dayIndex === 0 ? '#fff0f0' : dayIndex === 6 ? '#f0f0ff' : '#f8f9fa',
-                      color: dayIndex === 0 ? '#e53935' : dayIndex === 6 ? '#1e88e5' : '#333'
-                    }}>
+                    <th key={i} style={{ ...headerStyle, minWidth: '140px', background: dayIndex === 0 ? '#fff0f0' : dayIndex === 6 ? '#f0f0ff' : '#f8f9fa', color: dayIndex === 0 ? '#e53935' : dayIndex === 6 ? '#1e88e5' : '#333' }}>
                       <div style={{ fontWeight: '700' }}>{date.getMonth() + 1}/{date.getDate()}</div>
-                      <div style={{ fontSize: '11px', fontWeight: '500' }}>{dayNames[dayIndex]}</div>
+                      <div style={{ fontSize: '11px' }}>{dayNames[dayIndex]}</div>
                     </th>
                   );
                 })}
@@ -503,161 +634,71 @@ function App() {
             </thead>
             <tbody>
               {staff.length === 0 ? (
-                <tr>
-                  <td colSpan={4 + dates.length} style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
-                    スタッフが登録されていません。上のフォームから追加してください。
-                  </td>
-                </tr>
+                <tr><td colSpan={4 + dates.length} style={{ padding: '40px', textAlign: 'center', color: '#999' }}>スタッフが登録されていません</td></tr>
               ) : (
-                staff.map((s, index) => (
-                  <tr key={s.id} style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ ...cellStyle, position: 'sticky', left: 0, background: 'white', zIndex: 2, fontWeight: '600' }}>
-                      {index + 1}
-                    </td>
-                    <td style={{ ...cellStyle, position: 'sticky', left: '50px', background: 'white', zIndex: 2 }}>
-                      {s.staff_id}
-                    </td>
-                    <td style={{ ...cellStyle, position: 'sticky', left: '120px', background: 'white', zIndex: 2, fontWeight: '500' }}>
-                      {s.name}
-                    </td>
-                    <td style={{ ...cellStyle, position: 'sticky', left: '220px', background: 'white', zIndex: 2 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span>{s.line_name || '-'}</span>
-                        <button
-                          onClick={() => removeStaff(s.id)}
-                          style={{
-                            background: '#ff5252',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            width: '20px',
-                            height: '20px',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                            marginLeft: '8px'
-                          }}
-                        >
-                          ×
-                        </button>
-                      </div>
-                    </td>
-                    {dates.map((date, i) => {
-                      const key = getShiftKey(s.id, date);
-                      const shift = shifts[key] || {};
-                      const isOff = shift.is_off;
-                      const dayIndex = date.getDay();
-                      
-                      return (
-                        <td key={i} style={{
-                          ...cellStyle,
-                          background: isOff ? '#ffebee' : (dayIndex === 0 ? '#fff8f8' : dayIndex === 6 ? '#f8f8ff' : 'white'),
-                          minWidth: '140px'
-                        }}>
-                          {isOff ? (
-                            <div style={{ textAlign: 'center' }}>
-                              <span style={{
-                                background: '#ff5252',
-                                color: 'white',
-                                padding: '4px 12px',
-                                borderRadius: '12px',
-                                fontSize: '12px',
-                                fontWeight: '600'
-                              }}>
-                                OFF
-                              </span>
-                              <button
-                                onClick={() => clearShift(s.id, date)}
-                                style={{
-                                  marginLeft: '8px',
-                                  background: '#eee',
-                                  border: 'none',
-                                  borderRadius: '4px',
-                                  padding: '4px 8px',
-                                  fontSize: '10px',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                解除
-                              </button>
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <select
-                                  value={shift.start || ''}
-                                  onChange={(e) => updateShift(s.id, date, 'start', e.target.value)}
-                                  style={selectStyle}
-                                >
-                                  <option value="">開始</option>
-                                  {timeOptions.map(t => (
-                                    <option key={t} value={t}>{t}</option>
-                                  ))}
-                                </select>
-                                <span style={{ color: '#999' }}>〜</span>
-                                <select
-                                  value={shift.end || ''}
-                                  onChange={(e) => updateShift(s.id, date, 'end', e.target.value)}
-                                  style={selectStyle}
-                                >
-                                  <option value="">終了</option>
-                                  {timeOptions.map(t => (
-                                    <option key={t} value={t}>{t}</option>
-                                  ))}
-                                </select>
+                staff.map((s, index) => {
+                  const isMyRow = s.id === myStaffId;
+                  const canEditRow = canEdit(s.id);
+                  return (
+                    <tr key={s.id} style={{ borderBottom: '1px solid #eee', background: isMyRow ? '#fffde7' : 'transparent' }}>
+                      <td style={{ ...cellStyle, position: 'sticky', left: 0, background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontWeight: '600' }}>{index + 1}{isMyRow && ' ⭐'}</td>
+                      <td style={{ ...cellStyle, position: 'sticky', left: '50px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2 }}>{s.staff_id}</td>
+                      <td style={{ ...cellStyle, position: 'sticky', left: '120px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2, fontWeight: '500' }}>{s.name}</td>
+                      <td style={{ ...cellStyle, position: 'sticky', left: '220px', background: isMyRow ? '#fffde7' : 'white', zIndex: 2 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span>{s.line_name || '-'}</span>
+                          {isAdmin && <button onClick={() => removeStaff(s.id)} style={{ background: '#ff5252', color: 'white', border: 'none', borderRadius: '4px', width: '20px', height: '20px', fontSize: '12px', cursor: 'pointer', marginLeft: '8px' }}>×</button>}
+                        </div>
+                      </td>
+                      {dates.map((date, i) => {
+                        const key = getShiftKey(s.id, date);
+                        const shift = shifts[key] || {};
+                        const isOff = shift.is_off;
+                        const dayIndex = date.getDay();
+                        return (
+                          <td key={i} style={{ ...cellStyle, background: isOff ? '#ffebee' : (isMyRow ? '#fffde7' : (dayIndex === 0 ? '#fff8f8' : dayIndex === 6 ? '#f8f8ff' : 'white')), minWidth: '140px' }}>
+                            {isOff ? (
+                              <div style={{ textAlign: 'center' }}>
+                                <span style={{ background: '#ff5252', color: 'white', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: '600' }}>OFF</span>
+                                {canEditRow && <button onClick={() => clearShift(s.id, date)} style={{ marginLeft: '8px', background: '#eee', border: 'none', borderRadius: '4px', padding: '4px 8px', fontSize: '10px', cursor: 'pointer' }}>解除</button>}
                               </div>
-                              <button
-                                onClick={() => setOff(s.id, date)}
-                                style={{
-                                  background: '#ffebee',
-                                  color: '#e53935',
-                                  border: '1px solid #ffcdd2',
-                                  borderRadius: '4px',
-                                  padding: '2px 8px',
-                                  fontSize: '10px',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                OFFにする
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))
+                            ) : canEditRow ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <select value={shift.start || ''} onChange={(e) => updateShift(s.id, date, 'start', e.target.value)} style={selectStyle}>
+                                    <option value="">開始</option>
+                                    {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                                  </select>
+                                  <span style={{ color: '#999' }}>〜</span>
+                                  <select value={shift.end || ''} onChange={(e) => updateShift(s.id, date, 'end', e.target.value)} style={selectStyle}>
+                                    <option value="">終了</option>
+                                    {timeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                                  </select>
+                                </div>
+                                <button onClick={() => setOff(s.id, date)} style={{ background: '#ffebee', color: '#e53935', border: '1px solid #ffcdd2', borderRadius: '4px', padding: '2px 8px', fontSize: '10px', cursor: 'pointer' }}>OFFにする</button>
+                              </div>
+                            ) : (
+                              <div style={{ textAlign: 'center', color: '#666', fontSize: '12px' }}>{shift.start && shift.end ? `${shift.start}〜${shift.end}` : '-'}</div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* フッター */}
-      <div style={{
-        marginTop: '20px',
-        padding: '16px',
-        background: 'white',
-        borderRadius: '8px',
-        fontSize: '12px',
-        color: '#666',
-        display: 'flex',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: '16px'
-      }}>
-        <div>
-          <strong>📌 使い方：</strong>
-          <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
-            <li>各セルで開始時間と終了時間を選択してシフトを設定</li>
-            <li>「OFFにする」ボタンで休みに設定</li>
-            <li>データはクラウドに自動保存 ☁️</li>
-            <li>URLを共有すれば複数人で同時編集可能 🌐</li>
-          </ul>
-        </div>
-        <div style={{ textAlign: 'right', color: '#999' }}>
-          <p style={{ margin: 0 }}>スタッフ数: {staff.length}人</p>
-          <p style={{ margin: '4px 0 0 0' }}>登録シフト数: {Object.keys(shifts).length}件</p>
-        </div>
+      <div style={{ marginTop: '20px', padding: '16px', background: 'white', borderRadius: '8px', fontSize: '12px', color: '#666' }}>
+        <strong>📌 権限について：</strong>
+        <ul style={{ margin: '8px 0 0 0', paddingLeft: '20px' }}>
+          <li><strong>管理者</strong>：全スタッフの追加・削除、全シフトの編集が可能</li>
+          <li><strong>一般スタッフ</strong>：自分のシフトのみ編集可能、他は閲覧のみ</li>
+          <li>⭐マークは自分の行を示します</li>
+        </ul>
       </div>
     </div>
   );
