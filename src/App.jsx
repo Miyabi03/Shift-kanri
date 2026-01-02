@@ -83,9 +83,8 @@ function App() {
   const [newStaff, setNewStaff] = useState({ staff_id: '', name: '', line_name: '', email: '' });
   const [error, setError] = useState(null);
   
-  const [showAdminVerify, setShowAdminVerify] = useState(false);
-  const [adminCode, setAdminCode] = useState('');
-  const [sentCode, setSentCode] = useState(null);
+  // 管理者として許可されたメールアドレス（これ以外は管理者になれない）
+  const ALLOWED_ADMIN_EMAIL = 'mixssq@gmail.com';
 
   const generateDates = () => {
     const dates = [];
@@ -134,11 +133,18 @@ function App() {
 
   const checkUserRole = async (email, token) => {
     try {
-      const admins = await supabaseRequest('admins', 'GET', null, `?email=eq.${email}`, token);
-      if (admins && admins.length > 0) {
+      // 固定の管理者メールアドレスかチェック
+      if (email === ALLOWED_ADMIN_EMAIL) {
         setIsAdmin(true);
+        // adminsテーブルにも登録（まだなければ）
+        try {
+          await supabaseRequest('admins', 'POST', { email: email });
+        } catch (e) {
+          // 既に登録済みの場合はエラーを無視
+        }
       }
       
+      // 自分のスタッフIDを取得
       const myStaff = await supabaseRequest('staff', 'GET', null, `?email=eq.${email}`, token);
       if (myStaff && myStaff.length > 0) {
         setMyStaffId(myStaff[0].id);
@@ -355,29 +361,6 @@ function App() {
     }
   };
 
-  const registerAsAdmin = async () => {
-    if (!user) return;
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    setSentCode(code);
-    setShowAdminVerify(true);
-    alert(`認証コード: ${code}\n（本番環境ではメールで送信されます）`);
-  };
-
-  const verifyAdminCode = async () => {
-    if (adminCode === sentCode) {
-      try {
-        await supabaseRequest('admins', 'POST', { email: user.email });
-        setIsAdmin(true);
-        setShowAdminVerify(false);
-        alert('管理者として登録されました！');
-      } catch (err) {
-        alert('登録に失敗しました');
-      }
-    } else {
-      alert('認証コードが一致しません');
-    }
-  };
-
   const headerStyle = {
     padding: '12px 8px',
     textAlign: 'center',
@@ -480,61 +463,6 @@ function App() {
     );
   }
 
-  if (showAdminVerify) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        fontFamily: '"Hiragino Sans", "Noto Sans JP", sans-serif',
-        background: 'rgba(0,0,0,0.5)'
-      }}>
-        <div style={{
-          background: 'white',
-          padding: '32px',
-          borderRadius: '12px',
-          maxWidth: '400px',
-          width: '90%'
-        }}>
-          <h2 style={{ margin: '0 0 16px 0' }}>🔐 管理者認証</h2>
-          <p style={{ color: '#666', marginBottom: '16px' }}>認証コードを入力してください</p>
-          <input
-            type="text"
-            placeholder="認証コード"
-            value={adminCode}
-            onChange={(e) => setAdminCode(e.target.value.toUpperCase())}
-            style={{
-              width: '100%',
-              padding: '12px',
-              border: '2px solid #ddd',
-              borderRadius: '8px',
-              fontSize: '18px',
-              textAlign: 'center',
-              letterSpacing: '4px',
-              marginBottom: '16px',
-              boxSizing: 'border-box'
-            }}
-          />
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button
-              onClick={() => setShowAdminVerify(false)}
-              style={{ flex: 1, padding: '12px', background: '#eee', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              キャンセル
-            </button>
-            <button
-              onClick={verifyAdminCode}
-              style={{ flex: 1, padding: '12px', background: '#667eea', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              認証
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{
       fontFamily: '"Hiragino Sans", "Noto Sans JP", sans-serif',
@@ -559,11 +487,6 @@ function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {saveStatus && (
               <span style={{ background: 'rgba(255,255,255,0.2)', padding: '8px 16px', borderRadius: '20px', color: 'white', fontSize: '13px' }}>{saveStatus}</span>
-            )}
-            {!isAdmin && (
-              <button onClick={registerAsAdmin} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
-                🔐 管理者登録
-              </button>
             )}
             <button onClick={loadData} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
               🔄 更新
